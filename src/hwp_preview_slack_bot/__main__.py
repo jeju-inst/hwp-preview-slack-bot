@@ -20,6 +20,7 @@ import pathlib
 import subprocess
 import tempfile
 import threading
+import unicodedata
 import urllib.request
 from typing import Any
 
@@ -60,6 +61,80 @@ def _thread_ts_for_share(info: dict[str, Any], channel: str) -> str | None:
             ts = entries[0].get("ts")
             if ts:
                 return ts
+    return None
+
+
+def _stem_key(name: str) -> tuple[str, str]:
+    """(stem, suffix) normalized for comparison: NFC + casefold.
+
+    Korean filenames arrive as NFC or NFD depending on the uploader's OS (macOS
+    Finder hands out NFD), so ``문서.hwpx`` and ``문서.pdf`` may not match
+    byte-for-byte even when they look identical.
+    """
+    p = pathlib.PurePath(unicodedata.normalize("NFC", name or "").casefold())
+    return p.stem, p.suffix
+
+
+def _has_sibling_pdf(name: str, files: list[dict[str, Any]]) -> bool:
+    """True if ``files`` (one message's attachments) holds a ``.pdf`` whose
+    name matches ``name`` except for the extension.
+
+    The uploader already attached their own PDF of this HWP, so a bot-made
+    preview would just be a duplicate.
+    """
+    stem, _ = _stem_key(name)
+    if not stem:
+        return False
+    for f in files or []:
+        other_stem, other_suffix = _stem_key(f.get("name") or "")
+        if other_suffix == ".pdf" and other_stem == stem:
+            return True
+    return False
+
+
+def _share_entry(info: dict[str, Any], channel: str) -> dict[str, Any] | None:
+    """The single share of this file in ``channel``, or None if there is none
+    or more than one (``file_shared`` carries no message id, so with several
+    shares we can't tell which message triggered the event)."""
+    shares = info.get("shares", {}) or {}
+    entries = [
+        e
+        for scope in ("public", "private")
+        for e in ((shares.get(scope, {}) or {}).get(channel) or [])
+    ]
+    return entries[0] if len(entries) == 1 else None
+
+
+def _message_files(client, channel: str, info: dict[str, Any]) -> list[dict[str, Any]] | None:
+    """Attachments of the message this file was shared in, or None if that
+    message can't be determined/fetched (caller should then convert as usual).
+    """
+    entry = _share_entry(info, channel)
+    ts = (entry or {}).get("ts")
+    if not ts:
+        return None
+    thread_ts = entry.get("thread_ts")
+    try:
+        if thread_ts and thread_ts != ts:
+            # Uploaded as a thread reply — history doesn't list replies.
+            resp = client.conversations_replies(
+                channel=channel, ts=thread_ts, oldest=ts, latest=ts,
+                inclusive=True, limit=10,
+            )
+        else:
+            resp = client.conversations_history(
+                channel=channel, oldest=ts, latest=ts, inclusive=True, limit=1,
+            )
+    except Exception as e:
+        log.warning(
+            "message lookup failed channel=%s ts=%s error=%s; converting anyway",
+            channel, ts, getattr(e, "response", {}).get("error") or e,
+        )
+        return None
+    for m in resp.get("messages") or []:
+        if m.get("ts") == ts:
+            return m.get("files") or []
+    log.warning("message not found channel=%s ts=%s; converting anyway", channel, ts)
     return None
 
 
@@ -149,6 +224,16 @@ def build_app(bot_token: str) -> App:
             log.info(
                 "skip external (non-uploaded) file id=%s name=%s external_type=%s",
                 file_id, name, info.get("external_type") or "?",
+            )
+            return
+
+        # The uploader attached their own PDF of the same document in the same
+        # message — a bot-made preview would only duplicate it.
+        siblings = _message_files(client, channel, info)
+        if siblings is not None and _has_sibling_pdf(name, siblings):
+            log.info(
+                "skip: same-name pdf attached in same message file=%s channel=%s name=%s",
+                file_id, channel, name,
             )
             return
 
