@@ -1,0 +1,74 @@
+# Weekly: is there a newer rhwp, and does it render the bundled samples?
+# Runs scripts/check_rhwp_update.sh --dry-run (never modifies anything) and, when
+# a newer release exists, opens one issue per release with the smoke-test result.
+# Adopting it stays a normal PR: bump RHWP_VERSION in scripts/fetch_rhwp.sh,
+# then re-run fetch_rhwp.sh on the bot host and restart the bot.
+name: rhwp update check
+
+on:
+  schedule:
+    - cron: "0 0 * * 1"   # Mondays 09:00 KST
+  workflow_dispatch:
+    inputs:
+      pin_override:
+        description: "Pretend this rhwp tag is pinned (to exercise the new-release path)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Smoke-test the latest rhwp (dry run)
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RHWP_PIN_OVERRIDE: ${{ inputs.pin_override }}
+        run: |
+          [[ -n "$RHWP_PIN_OVERRIDE" ]] || unset RHWP_PIN_OVERRIDE
+          set +e
+          scripts/check_rhwp_update.sh --dry-run > check.log 2>&1
+          rc=$?
+          set -e
+          cat check.log
+          line=$(grep -m1 '^pinned:' check.log || true)
+          pinned=$(awk '{print $2}' <<<"$line")
+          latest=$(awk '{print $4}' <<<"$line")
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          echo "pinned=$pinned" >> "$GITHUB_OUTPUT"
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+          if [[ $rc -eq 2 ]]; then exit 2; fi
+
+      - name: Open an issue for a new release (once per release)
+        # a manual pin_override run only tests the check; it never files an issue
+        if: inputs.pin_override == '' && steps.check.outputs.latest != '' && steps.check.outputs.latest != steps.check.outputs.pinned
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PINNED: ${{ steps.check.outputs.pinned }}
+          LATEST: ${{ steps.check.outputs.latest }}
+          RC: ${{ steps.check.outputs.rc }}
+        run: |
+          title="rhwp ${LATEST} 나옴 (현재 ${PINNED})"
+          if gh issue list --state all --search "\"rhwp ${LATEST} 나옴\" in:title" --json number --jq '.[0].number' | grep -q .; then
+            echo "issue for ${LATEST} already exists"; exit 0
+          fi
+          if [[ "$RC" == "0" ]]; then verdict="샘플 렌더 시험 통과"; else verdict="**샘플 렌더 시험 실패** — 올리지 말고 원인 확인"; fi
+          {
+            echo "rhwp ${LATEST} 가 나왔음. 현재 고정 ${PINNED}. 결과: ${verdict}."
+            echo
+            echo "반영: \`scripts/fetch_rhwp.sh\` 의 \`RHWP_VERSION\` 을 올리는 PR → 머지 후 봇 맥에서 \`scripts/fetch_rhwp.sh\` 재실행·봇 재시작."
+            echo "릴리스: https://github.com/edwardkim/rhwp/releases/tag/${LATEST}"
+            echo
+            echo '```'
+            cat check.log
+            echo '```'
+            echo
+            echo "작성: rhwp-update-check 워크플로 (${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})"
+          } > body.md
+          gh issue create --title "$title" --body-file body.md
