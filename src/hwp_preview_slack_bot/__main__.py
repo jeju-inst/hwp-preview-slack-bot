@@ -93,12 +93,16 @@ def _has_sibling_pdf(name: str, files: list[dict[str, Any]]) -> bool:
 
 
 def _share_entry(info: dict[str, Any], channel: str) -> dict[str, Any] | None:
+    """The single share of this file in ``channel``, or None if there is none
+    or more than one (``file_shared`` carries no message id, so with several
+    shares we can't tell which message triggered the event)."""
     shares = info.get("shares", {}) or {}
-    for scope in ("public", "private"):
-        entries = (shares.get(scope, {}) or {}).get(channel)
-        if entries:
-            return entries[0]
-    return None
+    entries = [
+        e
+        for scope in ("public", "private")
+        for e in ((shares.get(scope, {}) or {}).get(channel) or [])
+    ]
+    return entries[0] if len(entries) == 1 else None
 
 
 def _message_files(client, channel: str, info: dict[str, Any]) -> list[dict[str, Any]] | None:

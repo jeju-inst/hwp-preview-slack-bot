@@ -64,3 +64,12 @@ def test_no_share_returns_none_without_calling_api():
     assert _message_files(c, "C1", {"shares": {}}) is None
     assert _message_files(c, "C1", {}) is None
     assert c.calls == []
+
+
+def test_multiple_shares_in_channel_is_ambiguous():
+    # file_shared has no message id; with several shares in the channel we
+    # can't tell which message triggered it, so don't risk a wrong skip.
+    c = FakeClient(history=[{"ts": "1.1", "files": FILES}])
+    info = {"shares": {"public": {"C1": [{"ts": "1.1"}, {"ts": "2.2"}]}}}
+    assert _message_files(c, "C1", info) is None
+    assert c.calls == []
