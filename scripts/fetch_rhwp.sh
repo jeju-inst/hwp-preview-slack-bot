@@ -8,7 +8,7 @@
 # Requires: gh (GitHub CLI), tar, shasum.
 set -euo pipefail
 
-RHWP_VERSION="v0.7.17"
+RHWP_VERSION="v0.9.1"
 RHWP_REPO="edwardkim/rhwp"
 
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
