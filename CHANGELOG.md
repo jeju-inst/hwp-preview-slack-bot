@@ -3,6 +3,19 @@
 This project follows **CalVer**: `YYYY.0M.0D.N` where `N` increments
 for multiple releases on the same date.
 
+## 2026.11.24.1 — 2026-11-24
+
+- **Skip** converting an `.hwp`/`.hwpx` when the same message already carries
+  a `.pdf` with the same name (extension aside) — the uploader attached their
+  own PDF, so a bot preview would only duplicate it (#2). Names are compared
+  after NFC normalization + casefolding (macOS uploads arrive in NFD). A PDF
+  with a different name, or no PDF, converts as before.
+- The message's attachment list is fetched with `conversations.history`
+  (or `conversations.replies` for uploads inside a thread). If the lookup
+  fails or the share/message can't be found, the bot converts as before
+  (never skips on uncertainty).
+- Tests: `tests/test_has_sibling_pdf.py`, `tests/test_message_files.py`.
+
 ## 2026.09.01.1 — 2026-09-01
 
 - **Fix**: pasted Google Drive (or Dropbox/Box) links to an `.hwpx` no longer
